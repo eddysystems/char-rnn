@@ -15,16 +15,18 @@ cmd:text('Load a checkpoint and print its options and validation losses.')
 cmd:text()
 cmd:text('Options')
 cmd:argument('-model','model to load')
-cmd:option('-gpuid',0,'gpu to use')
+cmd:option('-gpuid',0,'gpu to use (-1 for CPU)')
 cmd:text()
 
 -- parse input params
 opt = cmd:parse(arg)
 
-print('using CUDA on GPU ' .. opt.gpuid .. '...')
-require 'cutorch'
-require 'cunn'
-cutorch.setDevice(opt.gpuid + 1)
+if opt.gpuid >= 0 then
+  print('using CUDA on GPU ' .. opt.gpuid .. '...')
+  require 'cutorch'
+  require 'cunn'
+  cutorch.setDevice(opt.gpuid + 1)
+end
 
 local model = torch.load(opt.model)
 
