@@ -3,8 +3,6 @@
 require 'torch'
 require 'nn'
 require 'nngraph'
-require 'cutorch'
-require 'cunn'
 
 require 'util.OneHot'
 require 'util.misc'
