@@ -3,11 +3,11 @@
 
 This file trains a character-level multi-layer RNN on text data
 
-Code is based on implementation in 
+Code is based on implementation in
 https://github.com/oxford-cs-ml-2015/practical6
 but modified to have multi-layer support, GPU support, as well as
 many other common model/optimization bells and whistles.
-The practical6 code is in turn based on 
+The practical6 code is in turn based on
 https://github.com/wojciechz/learning_to_execute
 which is turn based on other stuff in Torch, etc... (long lineage)
 
@@ -50,19 +50,55 @@ cmd:option('-val_frac',0.05,'fraction of data that goes into validation set')
 -- bookkeeping
 cmd:option('-seed',123,'torch manual random number generator seed')
 cmd:option('-print_every',1,'how many steps/minibatches between printing out the loss')
+cmd:option('-validation_progress_every',10,'print validation progress every n batches')
 cmd:option('-eval_val_every',1000,'every how many iterations should we evaluate on validation data?')
+cmd:option('-checkpoint', '', 'start training from this checkpoint')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
-cmd:option('-savefile','lstm','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
+cmd:option('-savefile','lstm','filename to autosave the checkpoint to. Will be inside checkpoint_dir/')
 -- GPU/CPU
 cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
 cmd:text()
 
 -- parse input params
 opt = cmd:parse(arg)
+
+-- if -checkpoint is given, load the state
+if opt.checkpoint ~= '' then
+    if not path.exists(opt.checkpoint) then
+        print("can't find checkpoint file '" .. opt.checkpoint .. "', giving up.")
+        return
+    end
+
+    checkpoint = torch.load(opt.checkpoint)
+
+    -- overwrite the options with the ones from the checkpoint file
+    -- TODO: some options are probably useful to keep
+    opt = checkpoint.opt
+
+    -- we will still load the vocabulary as before!
+    --checkpoint.vocab = loader.vocab_mapping
+
+    -- protos is initialized later
+
+    train_losses = checkpoint.train_losses
+    val_losses = checkpoint.val_losses
+    val_loss = checkpoint.val_loss
+
+    start_iter = checkpoint.i+1
+
+else
+
+    checkpoint = nil
+    train_losses = {}
+    val_losses = {}
+    start_iter = 1
+
+end
+
 torch.manualSeed(opt.seed)
 -- train / val / test split for data, in fractions
 local test_frac = math.max(0, 1 - opt.train_frac - opt.val_frac)
-local split_sizes = {opt.train_frac, opt.val_frac, test_frac} 
+local split_sizes = {opt.train_frac, opt.val_frac, test_frac}
 
 if opt.gpuid >= 0 then
     print('using CUDA on GPU ' .. opt.gpuid .. '...')
@@ -70,18 +106,22 @@ if opt.gpuid >= 0 then
     require 'cunn'
     cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
 end
+
 -- create the data loader class
 local loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes)
 local vocab_size = loader.vocab_size  -- the number of distinct characters
 print('vocab size: ' .. vocab_size)
+
+-- restore data pointers from checkpoint
+if checkpoint ~= nil then
+    for split_index = 1,2,3 do
+        loader:reset_batch_pointer(split_index, checkpoint.batch_ix[split_index])
+    end
+end
+
 -- make sure output directory exists
 if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
 
--- define the model: prototypes for one timestep, then clone them in time
-protos = {}
-protos.embed = OneHot(vocab_size)
-print('creating an LSTM with ' .. opt.num_layers .. ' layers')
-protos.rnn = LSTM.lstm(vocab_size, opt.rnn_size, opt.num_layers, opt.dropout)
 -- the initial state of the cell/hidden states
 init_state = {}
 for L=1,opt.num_layers do
@@ -91,10 +131,29 @@ for L=1,opt.num_layers do
     table.insert(init_state, h_init:clone())
 end
 state_predict_index = #init_state -- index of blob to make prediction from
--- classifier on top
-protos.softmax = nn.Sequential():add(nn.Linear(opt.rnn_size, vocab_size)):add(nn.LogSoftMax())
--- training criterion (negative log likelihood)
-protos.criterion = nn.ClassNLLCriterion()
+
+-- make a validation initiali state or load it from disk
+local init_state_global
+if checkpoint == nil then
+    init_state_global = clone_list(init_state)
+else
+    init_state_global = checkpoint.init_state_global
+end
+
+-- initialize the model
+if checkpoint == nil then
+    -- define the model: prototypes for one timestep, then clone them in time
+    protos = {}
+    protos.embed = OneHot(vocab_size)
+    print('creating an LSTM with ' .. opt.num_layers .. ' layers')
+    protos.rnn = LSTM.lstm(vocab_size, opt.rnn_size, opt.num_layers, opt.dropout)
+    -- classifier on top
+    protos.softmax = nn.Sequential():add(nn.Linear(opt.rnn_size, vocab_size)):add(nn.LogSoftMax())
+    -- training criterion (negative log likelihood)
+    protos.criterion = nn.ClassNLLCriterion()
+else
+    protos = checkpoint.protos
+end
 
 -- ship the model to the GPU if desired
 if opt.gpuid >= 0 then
@@ -103,8 +162,12 @@ end
 
 -- put the above things into one flattened parameters tensor
 params, grad_params = model_utils.combine_all_parameters(protos.embed, protos.rnn, protos.softmax)
-params:uniform(-0.08, 0.08)
+
+-- initialize parameters to random values if we're not loading from file
+if checkpoint == nil then params:uniform(-0.08, 0.08) end
+
 print('number of parameters in the model: ' .. params:nElement())
+
 -- make a bunch of clones after flattening, as that reallocates memory
 clones = {}
 for name,proto in pairs(protos) do
@@ -121,7 +184,7 @@ function eval_split(split_index, max_batches)
     loader:reset_batch_pointer(split_index) -- move batch iteration pointer for this split to front
     local loss = 0
     local rnn_state = {[0] = init_state}
-    
+
     for i = 1,n do -- iterate over batches in the split
         -- fetch a batch
         local x, y = loader:next_batch(split_index)
@@ -141,7 +204,9 @@ function eval_split(split_index, max_batches)
         end
         -- carry over lstm state
         rnn_state[0] = rnn_state[#rnn_state]
-        print(i .. '/' .. n .. '...')
+        if i % 10 == 0 then
+	    print(i .. '/' .. n .. '...')
+	end
     end
 
     loss = loss / opt.seq_length / n
@@ -149,7 +214,6 @@ function eval_split(split_index, max_batches)
 end
 
 -- do fwd/bwd and return loss, grad_params
-local init_state_global = clone_list(init_state)
 function feval(x)
     if x ~= params then
         params:copy(x)
@@ -193,10 +257,10 @@ function feval(x)
         local dlst = clones.rnn[t]:backward({embeddings[t], unpack(rnn_state[t-1])}, drnn_statet_passin)
         drnn_state[t-1] = {}
         for k,v in pairs(dlst) do
-            if k == 1 then 
+            if k == 1 then
                 dembeddings[t] = v
             else
-                -- note we do k-1 because first item is dembeddings, and then follow the 
+                -- note we do k-1 because first item is dembeddings, and then follow the
                 -- derivatives of the state, starting at index 2. I know...
                 drnn_state[t-1][k-1] = v
             end
@@ -213,13 +277,11 @@ function feval(x)
 end
 
 -- start optimization here
-train_losses = {}
-val_losses = {}
 local optim_state = {learningRate = opt.learning_rate, alpha = opt.decay_rate}
 local iterations = opt.max_epochs * loader.ntrain
 local iterations_per_epoch = loader.ntrain
 local loss0 = nil
-for i = 1, iterations do
+for i = start_iter, iterations do
     local epoch = i / loader.ntrain
 
     local timer = torch.Timer()
@@ -246,13 +308,18 @@ for i = 1, iterations do
         checkpoint.i = i
         checkpoint.epoch = epoch
         checkpoint.vocab = loader.vocab_mapping
+
+        -- these must be saved too if we want validation to be consistent
+        checkpoint.init_state_global = init_state_global
+        checkpoint.batch_ix = loader.batch_ix
+
         torch.save(savefile, checkpoint)
     end
 
     if i % opt.print_every == 0 then
         print(string.format("%d/%d (epoch %.3f), train_loss = %6.8f, grad/param norm = %6.4e, time/batch = %.2fs", i, iterations, epoch, train_loss, grad_params:norm() / params:norm(), time))
     end
-   
+
     if i % 10 == 0 then collectgarbage() end
 
     -- handle early stopping if things are going really bad
