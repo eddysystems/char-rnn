@@ -86,6 +86,8 @@ if opt.checkpoint ~= '' then
 
     start_iter = checkpoint.i+1
 
+    torch.setRNGState(checkpoint.rng_state)
+
 else
 
     checkpoint = nil
@@ -93,9 +95,10 @@ else
     val_losses = {}
     start_iter = 1
 
+    torch.manualSeed(opt.seed)
+
 end
 
-torch.manualSeed(opt.seed)
 -- train / val / test split for data, in fractions
 local test_frac = math.max(0, 1 - opt.train_frac - opt.val_frac)
 local split_sizes = {opt.train_frac, opt.val_frac, test_frac}
@@ -312,6 +315,7 @@ for i = start_iter, iterations do
         -- these must be saved too if we want validation to be consistent
         checkpoint.init_state_global = init_state_global
         checkpoint.batch_ix = loader.batch_ix
+        checkpoint.rng_state = torch.getRNGState()
 
         torch.save(savefile, checkpoint)
     end
