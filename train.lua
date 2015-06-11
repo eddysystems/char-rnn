@@ -106,8 +106,6 @@ if opt.gpuid >= 0 then
     require 'cutorch'
     require 'cunn'
     cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
-
-    -- TODO: put all the tensors that should be on the GPU onto the GPU
 end
 
 -- train / val / test split for data, in fractions
@@ -163,10 +161,8 @@ end
 
 -- ship the model to the GPU if desired
 if opt.gpuid >= 0 then
-    for k,v in pairs(protos) do
-        print('cudaing ' .. k)
-        v = v:cuda()
-    end
+    for k,v in pairs(init_state_global) do init_state_global[k] = v:cuda() end
+    for k,v in pairs(protos) do protos[k] = v:cuda() end
 end
 
 -- put the above things into one flattened parameters tensor
@@ -309,8 +305,11 @@ for i = start_iter, iterations do
         local checkpoint = {}
 
         -- TODO: convert all CudaTensors back to FloatTensor when saving
-
-        checkpoint.protos = protos
+        uc_protos = {}
+        for k,v in pairs(protos) do
+            uc_protos[k] = v.float()
+        end
+        checkpoint.protos = uc_protos
         checkpoint.opt = opt
         checkpoint.train_losses = train_losses
         checkpoint.val_loss = val_loss
@@ -320,9 +319,15 @@ for i = start_iter, iterations do
         checkpoint.vocab = loader.vocab_mapping
 
         -- these must be saved too if we want validation to be consistent
-        checkpoint.init_state_global = init_state_global
+
+        uc_init_state_global = {}
+        for k,v in pairs(init_state_global) do
+            uc_init_state_global[k] = v:float()
+        end
+        checkpoint.init_state_global = uc_init_state_global
         checkpoint.batch_ix = loader.batch_ix
         checkpoint.rng_state = torch.getRNGState()
+        -- TODO: each CUDA device maintains its own RNG state?
 
         torch.save(savefile, checkpoint)
     end
