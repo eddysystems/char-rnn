@@ -64,6 +64,14 @@ cmd:text()
 -- parse input params
 opt = cmd:parse(arg)
 
+-- we must import the cuda classes before we try to deserialize the checkpoint
+if opt.gpuid >= 0 then
+    print('using CUDA on GPU ' .. opt.gpuid .. '...')
+    require 'cutorch'
+    require 'cunn'
+    cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
+end
+
 -- if -checkpoint is given, load the state
 if opt.checkpoint ~= '' then
     if not path.exists(opt.checkpoint) then
@@ -104,13 +112,6 @@ end
 -- train / val / test split for data, in fractions
 local test_frac = math.max(0, 1 - opt.train_frac - opt.val_frac)
 local split_sizes = {opt.train_frac, opt.val_frac, test_frac}
-
-if opt.gpuid >= 0 then
-    print('using CUDA on GPU ' .. opt.gpuid .. '...')
-    require 'cutorch'
-    require 'cunn'
-    cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
-end
 
 -- create the data loader class
 local loader = CharSplitLMMinibatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, split_sizes)
