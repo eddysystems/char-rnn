@@ -107,8 +107,7 @@ if opt.gpuid >= 0 then
     require 'cunn'
     cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
 
-    -- put all the tensors that should be on the GPU onto the GPU
-    ...
+    -- TODO: put all the tensors that should be on the GPU onto the GPU
 end
 
 -- train / val / test split for data, in fractions
@@ -309,10 +308,7 @@ for i = start_iter, iterations do
         print('saving checkpoint to ' .. savefile)
         local checkpoint = {}
 
-        -- convert all CudaTensors back to FloatTensor so that the model can be
-        -- used without a gpu
-
-        ...
+        -- TODO: convert all CudaTensors back to FloatTensor when saving
 
         checkpoint.protos = protos
         checkpoint.opt = opt
