@@ -164,7 +164,7 @@ end
 -- ship the model to the GPU if desired
 if opt.gpuid >= 0 then
     for k,v in pairs(protos) do
-        print 'cudaing ' .. k
+        print('cudaing ' .. k)
         v = v:cuda()
     end
 end
