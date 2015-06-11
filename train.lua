@@ -64,14 +64,6 @@ cmd:text()
 -- parse input params
 opt = cmd:parse(arg)
 
--- we must import the cuda classes before we try to deserialize the checkpoint
-if opt.gpuid >= 0 then
-    print('using CUDA on GPU ' .. opt.gpuid .. '...')
-    require 'cutorch'
-    require 'cunn'
-    cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
-end
-
 -- if -checkpoint is given, load the state
 if opt.checkpoint ~= '' then
     if not path.exists(opt.checkpoint) then
@@ -109,6 +101,16 @@ else
 
 end
 
+if opt.gpuid >= 0 then
+    print('using CUDA on GPU ' .. opt.gpuid .. '...')
+    require 'cutorch'
+    require 'cunn'
+    cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
+
+    -- put all the tensors that should be on the GPU onto the GPU
+    ...
+end
+
 -- train / val / test split for data, in fractions
 local test_frac = math.max(0, 1 - opt.train_frac - opt.val_frac)
 local split_sizes = {opt.train_frac, opt.val_frac, test_frac}
@@ -138,7 +140,7 @@ for L=1,opt.num_layers do
 end
 state_predict_index = #init_state -- index of blob to make prediction from
 
--- make a validation initiali state or load it from disk
+-- make a validation initial state or load it from disk
 local init_state_global
 if checkpoint == nil then
     init_state_global = clone_list(init_state)
@@ -162,7 +164,10 @@ end
 
 -- ship the model to the GPU if desired
 if opt.gpuid >= 0 then
-    for k,v in pairs(protos) do v:cuda() end
+    for k,v in pairs(protos) do
+        print 'cudaing ' .. k
+        v = v:cuda()
+    end
 end
 
 -- put the above things into one flattened parameters tensor
@@ -303,6 +308,12 @@ for i = start_iter, iterations do
         local savefile = string.format('%s/lm_%s_epoch%.2f_%.4f.t7', opt.checkpoint_dir, opt.savefile, epoch, val_loss)
         print('saving checkpoint to ' .. savefile)
         local checkpoint = {}
+
+        -- convert all CudaTensors back to FloatTensor so that the model can be
+        -- used without a gpu
+
+        ...
+
         checkpoint.protos = protos
         checkpoint.opt = opt
         checkpoint.train_losses = train_losses
