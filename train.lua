@@ -307,7 +307,7 @@ for i = start_iter, iterations do
         -- TODO: convert all CudaTensors back to FloatTensor when saving
         uc_protos = {}
         for k,v in pairs(protos) do
-            uc_protos[k] = v.float()
+            uc_protos[k] = v:float()
         end
         checkpoint.protos = uc_protos
         checkpoint.opt = opt
