@@ -58,11 +58,14 @@ cmd:option('-checkpoint', '', 'start training from this checkpoint')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
 cmd:option('-savefile','lstm','filename to autosave the checkpoint to. Will be inside checkpoint_dir/')
 -- GPU/CPU
-cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU')
+cmd:option('-gpuid',0,'which gpu to use. -1 = use CPU (overrides checkpoint!)')
 cmd:text()
 
 -- parse input params
 opt = cmd:parse(arg)
+
+-- override the GPU setting in any checkpoint
+gpuid = opt.gpuid
 
 -- if -checkpoint is given, load the state
 if opt.checkpoint ~= '' then
@@ -101,11 +104,11 @@ else
 
 end
 
-if opt.gpuid >= 0 then
-    print('using CUDA on GPU ' .. opt.gpuid .. '...')
+if gpuid >= 0 then
+    print('using CUDA on GPU ' .. gpuid .. '...')
     require 'cutorch'
     require 'cunn'
-    cutorch.setDevice(opt.gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
+    cutorch.setDevice(gpuid + 1) -- note +1 to make it 0 indexed! sigh lua
 end
 
 -- train / val / test split for data, in fractions
@@ -131,7 +134,7 @@ if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
 init_state = {}
 for L=1,opt.num_layers do
     local h_init = torch.zeros(opt.batch_size, opt.rnn_size)
-    if opt.gpuid >=0 then h_init = h_init:cuda() end
+    if gpuid >=0 then h_init = h_init:cuda() end
     table.insert(init_state, h_init:clone())
     table.insert(init_state, h_init:clone())
 end
@@ -160,7 +163,7 @@ else
 end
 
 -- ship the model to the GPU if desired
-if opt.gpuid >= 0 then
+if gpuid >= 0 then
     for k,v in pairs(init_state_global) do init_state_global[k] = v:cuda() end
     for k,v in pairs(protos) do protos[k] = v:cuda() end
 end
@@ -193,7 +196,7 @@ function eval_split(split_index, max_batches)
     for i = 1,n do -- iterate over batches in the split
         -- fetch a batch
         local x, y = loader:next_batch(split_index)
-        if opt.gpuid >= 0 then -- ship the input arrays to GPU
+        if gpuid >= 0 then -- ship the input arrays to GPU
             -- have to convert to float because integers can't be cuda()'d
             x = x:float():cuda()
             y = y:float():cuda()
@@ -227,7 +230,7 @@ function feval(x)
 
     ------------------ get minibatch -------------------
     local x, y = loader:next_batch(1)
-    if opt.gpuid >= 0 then -- ship the input arrays to GPU
+    if gpuid >= 0 then -- ship the input arrays to GPU
         -- have to convert to float because integers can't be cuda()'d
         x = x:float():cuda()
         y = y:float():cuda()
@@ -307,7 +310,7 @@ for i = start_iter, iterations do
         -- TODO: convert all CudaTensors back to FloatTensor when saving
         uc_protos = {}
         for k,v in pairs(protos) do
-            uc_protos[k] = v:float()
+            uc_protos[k] = v:double()
         end
         checkpoint.protos = uc_protos
         checkpoint.opt = opt
@@ -322,7 +325,7 @@ for i = start_iter, iterations do
 
         uc_init_state_global = {}
         for k,v in pairs(init_state_global) do
-            uc_init_state_global[k] = v:float()
+            uc_init_state_global[k] = v:double()
         end
         checkpoint.init_state_global = uc_init_state_global
         checkpoint.batch_ix = loader.batch_ix
